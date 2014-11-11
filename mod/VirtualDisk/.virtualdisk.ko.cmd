@@ -1,1 +1,0 @@
-cmd_/root/mod/VirtualDisk/virtualdisk.ko := ld -r -m elf_x86_64 -T /usr/src/linux-headers-3.5.0-23-generic/scripts/module-common.lds --build-id  -o /root/mod/VirtualDisk/virtualdisk.ko /root/mod/VirtualDisk/virtualdisk.o /root/mod/VirtualDisk/virtualdisk.mod.o
