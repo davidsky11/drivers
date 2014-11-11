@@ -1,0 +1,14 @@
+ifneq ($(KERNELRELEASE),)
+	obj-m := virtualdisk.o
+
+else
+	KDIR := /lib/modules/$(shell uname -r)/build
+	PWD := $(shell pwd)
+
+all:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
+
+clean:
+	rm -rf *.o *~ *.ko *.symvers *.order *.mod.c
+
+endif
