@@ -18,19 +18,22 @@
 
 #include "virtualdisk.h"
 
-static void VirtualDisk_setup_cdev(struct VirtualDisk *dev, int minor);
-int VirtualDisk_open(struct inode *inode, struct file *filp);
-int VirtualDisk_release(struct inode *inode, struct file *filp);
-static ssize_t VirtualDisk_read(struct file *filp, char __user *buf, size_t size, loff_t *ppos);
-static ssize_t VirtualDisk_write(struct file *filp, const char __user *buf, size_t size, loff_t *ppos);
-static loff_t VirtualDisk_llseek(struct file *filp, loff_t offset, int orig);
-static long VirtualDisk_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+static dev_t devno;
 
-static const struct file_operations VirtualDisk_fops;
+static struct VirtualDisk *vd_devp;
 
-struct VirtualDisk *vd_devp;
 
-int devno;
+/* 文件操作结构体 */
+static const struct file_operations VirtualDisk_fops = 
+{
+	.owner = THIS_MODULE,
+	.llseek = VirtualDisk_llseek,
+	.read = VirtualDisk_read,
+	.write = VirtualDisk_write,
+	.compat_ioctl = VirtualDisk_ioctl,
+	.open = VirtualDisk_open,
+	.release = VirtualDisk_release,
+};
 
 /* 初始化并注册cdev */
 static void VirtualDisk_setup_cdev(struct VirtualDisk *dev, int minor)
@@ -45,18 +48,6 @@ static void VirtualDisk_setup_cdev(struct VirtualDisk *dev, int minor)
 		printk(KERN_NOTICE "Error in cdev_add()\n");
 }
 
-/* 文件操作结构体 */
-static const struct file_operations VirtualDisk_fops = 
-{
-	.owner = THIS_MODULE,
-	.llseek = VirtualDisk_llseek,
-	.read = VirtualDisk_read,
-	.write = VirtualDisk_write,
-	.compat_ioctl = VirtualDisk_ioctl,
-	.open = VirtualDisk_open,
-	.release = VirtualDisk_release,
-};
-
 /* 文件打开函数 */
 int VirtualDisk_open(struct inode *inode, struct file *filp)
 {
@@ -65,14 +56,6 @@ int VirtualDisk_open(struct inode *inode, struct file *filp)
 	filp->private_data = vd_devp;
 	devp = filp->private_data;
 	devp->count++;
-	return 0;
-}
-
-/* 文件释放函数 */
-int VirtualDisk_release(struct inode *inode, struct file *filp)
-{
-	struct VirtualDisk *devp = filp->private_data;
-	devp->count--;
 	return 0;
 }
 
@@ -107,16 +90,19 @@ static ssize_t VirtualDisk_read(struct file *filp, char __user *buf, size_t size
 /* 写函数 */
 static ssize_t VirtualDisk_write(struct file *filp, const char __user *buf, size_t size, loff_t *ppos)
 {
-	unsigned long p = *ppos;
-	int ret = 0;
-	unsigned int count = size;
-	struct VirtualDisk *devp = filp->private_data;
+	unsigned long p = *ppos;			/* 记录文件指针偏移位置*/
+	int ret = 0;						/* 返回值 */
+	unsigned int count = size;			/* 记录需要写入的字节数 */
+	struct VirtualDisk *devp = filp->private_data;		/* 获得设备结构体指针 */
 
 	/* 分析和获取有效的写长度 */
 	if (p >= VIRTUALDISK_SIZE)
 		return count ? - ENXIO : 0;
 	if (count > VIRTUALDISK_SIZE - p)
 		count = VIRTUALDISK_SIZE - p;
+#ifdef DEBUG
+	printk(KERN_INFO "VirtualDisk_write offset : %ld - written bytes : %d\n", p, count);
+#endif
 
 	/* 用户空间 -> 内核空间 */
 	if (copy_from_user(devp->mem + p, buf, count))
@@ -132,10 +118,10 @@ static ssize_t VirtualDisk_write(struct file *filp, const char __user *buf, size
 }
 
 /* seek文件定位函数 */
-static loff_t VirtualDisk_llseek(struct file *filp, loff_t offset, int orig)
+static loff_t VirtualDisk_llseek(struct file *filp, loff_t offset, int whence)
 {
 	loff_t ret = 0;
-	switch (orig)
+	switch (whence)
 	{
 		case SEEK_SET:
 			if (offset < 0)
@@ -148,9 +134,13 @@ static loff_t VirtualDisk_llseek(struct file *filp, loff_t offset, int orig)
 				ret = - EINVAL;
 				break;
 			}
-			filp->f_pos = (unsigned int)offset;
-			ret = filp->f_pos;
+			filp->f_pos = (unsigned int)offset;			/* 更新文件指针位置 */
+			ret = filp->f_pos;							/* 返回位置偏移 */
+#ifdef DEBUG
+			printk(KERN_INFO "SEEK_SET offset : %d\n", (int)ret);
+#endif
 			break;
+			
 		case SEEK_CUR:
 			if ((filp->f_pos + offset) > VIRTUALDISK_SIZE)
 			{
@@ -164,6 +154,9 @@ static loff_t VirtualDisk_llseek(struct file *filp, loff_t offset, int orig)
 			}
 			filp->f_pos += offset;
 			ret = filp->f_pos;
+#ifdef DEBUG
+			printk(KERN_INFO "SEEK_CUR offset : %d\n", (int)ret);
+#endif
 			break;
 
 		default:
@@ -201,11 +194,19 @@ static long VirtualDisk_ioctl(struct file *filp, unsigned int cmd, unsigned long
 	return (long)0;
 }
 
+/* 文件释放函数 */
+int VirtualDisk_release(struct inode *inode, struct file *filp)
+{
+	struct VirtualDisk *devp = filp->private_data;
+	devp->count--;
+	return 0;
+}
+
 /* 设备驱动模块加载函数 */
 int VirtualDisk_init(void)
 {
 	int result;
-	dev_t devno = MKDEV(VirtualDisk_major, 0);		/* 构建设备号 */
+	devno = MKDEV(VirtualDisk_major, 0);		/* 构建设备号 */
 	/* 申请设备号 */
 	if (VirtualDisk_major)
 		result = register_chrdev_region(devno, 1, "VirtualDisk");
@@ -244,3 +245,11 @@ void VirtualDisk_exit(void)
 	unregister_chrdev_region(MKDEV(VirtualDisk_major, 0), 1);
 										/* 释放设备号 */
 }
+
+module_init(VirtualDisk_init);
+module_exit(VirtualDisk_exit);
+
+MODULE_LICENSE("Dual BSD/GPL");
+MODULE_AUTHOR("kevin");
+MODULE_DESCRIPTION("This is a char driver of 'VirtualDisk'!");
+MODULE_VERSION("V1.0");
