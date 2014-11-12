@@ -27,5 +27,12 @@
 *.i*86
 *.x86_64
 *.hex
+
 *~		# 排除备份文件
 .*		# 排除隐藏文件
+*.mod
+*.cmd
+*.mod.c
+*.order
+*/.tmp_versions/*
+*.symvers
